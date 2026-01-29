@@ -41,7 +41,7 @@ def load_data():
     df = pd.read_csv("Waitlist.csv")
     df.columns = df.columns.str.strip()
 
-    for col in ["Full Enrolments", "Number of Waitlists"]:
+    for col in ["Full Enrolments", "Number of Waitlists", "Total (including waitlist)"]:
         if col in df.columns:
             df[col] = df[col].astype(str).str.replace(",", "", regex=False).astype(float)
         else:
@@ -94,12 +94,15 @@ if show_high_demand_only:
 # ─────────────────────────────
 total_enrollment = display_df["Full Enrolments"].sum()
 total_waitlist   = display_df["Number of Waitlists"].sum()
+total_enrollment_waitlist_included = display_df["Total (including waitlist)"].sum()
 
-col1, col2 = st.columns(2)
+col1, col2, col3 = st.columns(3)
 with col1:
-    st.metric("Total Enrollment", f"{int(round(total_enrollment)):,}")
+    st.metric("Full Enrollment", f"{int(round(total_enrollment)):,}")
 with col2:
     st.metric("Total Waitlist", f"{int(round(total_waitlist)):,}")
+with col3:
+    st.metric("Total (including waitlist)", f"{int(round(total_enrollment_waitlist_included)):,}")
 
 # ─────────────────────────────
 # Data preview with highlighting + integer display
@@ -107,7 +110,7 @@ with col2:
 st.subheader("Filtered Data" + (" – High Demand Only" if show_high_demand_only else ""))
 
 # Ensure integer display
-for col in ["Full Enrolments", "Number of Waitlists"]:
+for col in ["Full Enrolments", "Number of Waitlists", "Total (including waitlist)"]:
     if col in display_df.columns:
         display_df[col] = display_df[col].round(0).astype("Int64")
 
