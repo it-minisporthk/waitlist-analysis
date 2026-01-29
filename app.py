@@ -52,7 +52,7 @@ def load_data():
     df.columns = df.columns.str.strip()
 
     # Ensure numeric columns
-    for col in ["Enrollment", "Waitlist"]:
+    for col in ["Full Enrolments", "Number of Waitlists"]:
         if col in df.columns:
             df[col] = (
                 df[col]
