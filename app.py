@@ -1,8 +1,9 @@
 import streamlit as st
 import pandas as pd
+import os
 
 # ─────────────────────────────
-# 🔐 Password gate (ask once)
+# 🔐 Password gate — comment out the call below to disable locally
 # ─────────────────────────────
 def require_password():
     if "authenticated" not in st.session_state:
@@ -13,11 +14,7 @@ def require_password():
 
     st.title("🔐 Password Required")
 
-    password = st.text_input(
-        "Enter password",
-        type="password",
-        key="password_input"
-    )
+    password = st.text_input("Enter password", type="password", key="password_input")
 
     if st.button("Unlock"):
         if password == st.secrets["auth"]["password"]:
@@ -28,17 +25,12 @@ def require_password():
 
     st.stop()
 
-
-require_password()
+# require_password()   # ← keep commented for local runs
 
 # ─────────────────────────────
 # Page config
 # ─────────────────────────────
-st.set_page_config(
-    page_title="Enrollment & Waitlist Dashboard",
-    layout="wide"
-)
-
+st.set_page_config(page_title="Enrollment & Waitlist Dashboard", layout="wide")
 st.title("Enrollment & Waitlist Dashboard")
 
 # ─────────────────────────────
@@ -47,84 +39,94 @@ st.title("Enrollment & Waitlist Dashboard")
 @st.cache_data
 def load_data():
     df = pd.read_csv("Waitlist.csv")
-
-    # Normalize column names
     df.columns = df.columns.str.strip()
 
-    # Ensure numeric columns
     for col in ["Full Enrolments", "Number of Waitlists"]:
         if col in df.columns:
-            df[col] = (
-                df[col]
-                .astype(str)
-                .replace({",": ""}, regex=True)
-                .astype(float)
-            )
+            df[col] = df[col].astype(str).str.replace(",", "", regex=False).astype(float)
         else:
-            st.error(f"❌ '{col}' column not found in CSV")
+            st.error(f"❌ Column '{col}' not found in CSV")
 
     return df
-
 
 df = load_data()
 
 # ─────────────────────────────
-# Sidebar filters (optional)
+# Sidebar filters
 # ─────────────────────────────
 st.sidebar.header("Filters (leave blank for all)")
 
-venues = st.sidebar.multiselect(
-    "Venue",
-    options=sorted(df["Venue"].dropna().unique())
-)
+terms = st.sidebar.multiselect("Term", options=sorted(df["Term"].dropna().unique()))
+venues = st.sidebar.multiselect("Venue", options=sorted(df["Venue"].dropna().unique()))
+time_of_day = st.sidebar.multiselect("Time of Day (AM / PM)", options=sorted(df["AM/PM"].dropna().unique()))
+start_times = st.sidebar.multiselect("Start Time", options=sorted(df["Start Time"].dropna().unique()))
 
-time_of_day = st.sidebar.multiselect(
-    "Time of Day (AM / PM)",
-    options=sorted(df["AM/PM"].dropna().unique())
-)
-
-start_times = st.sidebar.multiselect(
-    "Start Time",
-    options=sorted(df["Start Time"].dropna().unique())
-)
+show_high_demand_only = st.sidebar.checkbox("Show high-demand classes only", value=False,
+                                            help="Only display classes where waitlist > enrolments")
 
 # ─────────────────────────────
-# Apply filters conditionally
+# Apply filters step by step
 # ─────────────────────────────
 filtered_df = df.copy()
 
 if venues:
     filtered_df = filtered_df[filtered_df["Venue"].isin(venues)]
-
 if time_of_day:
     filtered_df = filtered_df[filtered_df["AM/PM"].isin(time_of_day)]
-
 if start_times:
     filtered_df = filtered_df[filtered_df["Start Time"].isin(start_times)]
+if terms:
+    filtered_df = filtered_df[filtered_df["Term"].isin(terms)]
 
 # ─────────────────────────────
-# Metrics
+# Apply high-demand toggle (after other filters)
 # ─────────────────────────────
-total_enrollment = filtered_df["Enrollment"].sum()
-total_waitlist = filtered_df["Waitlist"].sum()
+display_df = filtered_df.copy()
+
+if show_high_demand_only:
+    if "Full Enrolments" in display_df.columns and "Number of Waitlists" in display_df.columns:
+        display_df = display_df[display_df["Number of Waitlists"] > display_df["Full Enrolments"]]
+    else:
+        st.sidebar.warning("High-demand filter unavailable — missing columns")
+
+# ─────────────────────────────
+# Metrics — based on final display_df
+# ─────────────────────────────
+total_enrollment = display_df["Full Enrolments"].sum()
+total_waitlist   = display_df["Number of Waitlists"].sum()
 
 col1, col2 = st.columns(2)
-
 with col1:
-    st.metric("Total Enrollment", f"{int(total_enrollment):,}")
-
+    st.metric("Total Enrollment", f"{int(round(total_enrollment)):,}")
 with col2:
-    st.metric("Total Waitlist", f"{int(total_waitlist):,}")
+    st.metric("Total Waitlist", f"{int(round(total_waitlist)):,}")
 
 # ─────────────────────────────
-# Data preview
+# Data preview with highlighting + integer display
 # ─────────────────────────────
-st.subheader("Filtered Data")
-st.dataframe(filtered_df, use_container_width=True)
+st.subheader("Filtered Data" + (" – High Demand Only" if show_high_demand_only else ""))
 
-# ─────────────────────────────
-# Optional logout
-# ─────────────────────────────
-if st.sidebar.button("Logout"):
-    st.session_state.authenticated = False
-    st.rerun()
+# Ensure integer display
+for col in ["Full Enrolments", "Number of Waitlists"]:
+    if col in display_df.columns:
+        display_df[col] = display_df[col].round(0).astype("Int64")
+
+def highlight_high_waitlist(row):
+    if pd.notna(row["Number of Waitlists"]) and pd.notna(row["Full Enrolments"]):
+        if row["Number of Waitlists"] > row["Full Enrolments"]:
+            return ["background-color: #ffcccc"] * len(row)
+    return [""] * len(row)
+
+if "Full Enrolments" in display_df.columns and "Number of Waitlists" in display_df.columns:
+    styled_df = display_df.style.apply(highlight_high_waitlist, axis=1)
+    st.dataframe(styled_df, use_container_width=True, hide_index=True)
+else:
+    st.dataframe(display_df, use_container_width=True)
+
+st.caption("🔴 Rows in red: Waitlist > Full Enrolments (high demand)")
+
+# Logout button if password active
+if "authenticated" in st.session_state and st.session_state.authenticated:
+    if st.sidebar.button("Logout"):
+        st.session_state.authenticated = False
+        st.rerun()
