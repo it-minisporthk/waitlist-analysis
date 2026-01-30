@@ -1,9 +1,8 @@
 import streamlit as st
 import pandas as pd
-import os
 
 # ─────────────────────────────
-# 🔐 Password gate — comment out the call below to disable locally
+# 🔐 Password protection (password only, once per session)
 # ─────────────────────────────
 def require_password():
     if "authenticated" not in st.session_state:
@@ -14,7 +13,7 @@ def require_password():
 
     st.title("🔐 Password Required")
 
-    password = st.text_input("Enter password", type="password", key="password_input")
+    password = st.text_input("Enter password", type="password")
 
     if st.button("Unlock"):
         if password == st.secrets["auth"]["password"]:
@@ -25,12 +24,17 @@ def require_password():
 
     st.stop()
 
-# require_password()   # ← keep commented for local runs
+# 🔴 Uncomment this when deploying
+# require_password()
 
 # ─────────────────────────────
 # Page config
 # ─────────────────────────────
-st.set_page_config(page_title="Enrollment & Waitlist Dashboard", layout="wide")
+st.set_page_config(
+    page_title="Enrollment & Waitlist Dashboard",
+    layout="wide"
+)
+
 st.title("Enrollment & Waitlist Dashboard")
 
 # ─────────────────────────────
@@ -41,11 +45,32 @@ def load_data():
     df = pd.read_csv("Waitlist.csv")
     df.columns = df.columns.str.strip()
 
-    for col in ["Full Enrolments", "Number of Waitlists", "Total (including waitlist)"]:
+    # Normalize Day of Week (CRITICAL FIX)
+    if "Day of Week" in df.columns:
+        df["Day of Week"] = (
+            df["Day of Week"]
+            .astype(str)
+            .str.strip()
+            .str.title()
+        )
+
+    # Clean numeric columns
+    numeric_cols = [
+        "Full Enrolments",
+        "Number of Waitlists",
+        "Total (including waitlist)"
+    ]
+
+    for col in numeric_cols:
         if col in df.columns:
-            df[col] = df[col].astype(str).str.replace(",", "", regex=False).astype(float)
+            df[col] = (
+                df[col]
+                .astype(str)
+                .str.replace(",", "", regex=False)
+                .astype(float)
+            )
         else:
-            st.error(f"❌ Column '{col}' not found in CSV")
+            st.error(f"❌ Missing required column: {col}")
 
     return df
 
@@ -56,79 +81,115 @@ df = load_data()
 # ─────────────────────────────
 st.sidebar.header("Filters (leave blank for all)")
 
-terms = st.sidebar.multiselect("Term", options=sorted(df["Term"].dropna().unique()))
-venues = st.sidebar.multiselect("Venue", options=sorted(df["Venue"].dropna().unique()))
-time_of_day = st.sidebar.multiselect("Time of Day (AM / PM)", options=sorted(df["AM/PM"].dropna().unique()))
-start_times = st.sidebar.multiselect("Start Time", options=sorted(df["Start Time"].dropna().unique()))
+venues = st.sidebar.multiselect(
+    "Venue",
+    options=sorted(df["Venue"].dropna().unique())
+)
 
-show_high_demand_only = st.sidebar.checkbox("Show high-demand classes only", value=False,
-                                            help="Only display classes where waitlist > enrolments")
+# ✅ Ordered Day of Week filter (Mon → Sun)
+WEEKDAY_ORDER = [
+    "Mon",
+    "Tue",
+    "Wed",
+    "Thu",
+    "Fri",
+    "Sat",
+    "Sun",
+]
+
+available_days = df["Day of Week"].dropna().unique()
+ordered_days = [d for d in WEEKDAY_ORDER if d in available_days]
+
+days_of_week = st.sidebar.multiselect(
+    "Day of Week",
+    options=ordered_days
+)
+
+time_of_day = st.sidebar.multiselect(
+    "Time of Day (AM / PM)",
+    options=sorted(df["AM/PM"].dropna().unique())
+)
+
+start_times = st.sidebar.multiselect(
+    "Start Time",
+    options=sorted(df["Start Time"].dropna().unique())
+)
+
+show_high_demand_only = st.sidebar.checkbox(
+    "Show high-demand classes only",
+    help="Waitlist greater than full enrolments"
+)
 
 # ─────────────────────────────
-# Apply filters step by step
+# Apply filters
 # ─────────────────────────────
 filtered_df = df.copy()
 
 if venues:
     filtered_df = filtered_df[filtered_df["Venue"].isin(venues)]
+
+if days_of_week:
+    filtered_df = filtered_df[filtered_df["Day of Week"].isin(days_of_week)]
+
 if time_of_day:
     filtered_df = filtered_df[filtered_df["AM/PM"].isin(time_of_day)]
+
 if start_times:
     filtered_df = filtered_df[filtered_df["Start Time"].isin(start_times)]
-if terms:
-    filtered_df = filtered_df[filtered_df["Term"].isin(terms)]
 
-# ─────────────────────────────
-# Apply high-demand toggle (after other filters)
-# ─────────────────────────────
-display_df = filtered_df.copy()
-
+# High-demand filter
 if show_high_demand_only:
-    if "Full Enrolments" in display_df.columns and "Number of Waitlists" in display_df.columns:
-        display_df = display_df[display_df["Number of Waitlists"] > display_df["Full Enrolments"]]
-    else:
-        st.sidebar.warning("High-demand filter unavailable — missing columns")
+    filtered_df = filtered_df[
+        filtered_df["Number of Waitlists"] > filtered_df["Full Enrolments"]
+    ]
 
 # ─────────────────────────────
-# Metrics — based on final display_df
+# Metrics
 # ─────────────────────────────
-total_enrollment = display_df["Full Enrolments"].sum()
-total_waitlist   = display_df["Number of Waitlists"].sum()
-total_enrollment_waitlist_included = display_df["Total (including waitlist)"].sum()
+total_enrolment = filtered_df["Full Enrolments"].sum()
+total_waitlist = filtered_df["Number of Waitlists"].sum()
+total_combined = filtered_df["Total (including waitlist)"].sum()
 
 col1, col2, col3 = st.columns(3)
-with col1:
-    st.metric("Full Enrollment", f"{int(round(total_enrollment)):,}")
-with col2:
-    st.metric("Total Waitlist", f"{int(round(total_waitlist)):,}")
-with col3:
-    st.metric("Total (including waitlist)", f"{int(round(total_enrollment_waitlist_included)):,}")
+
+col1.metric("Full Enrolments", f"{int(total_enrolment):,}")
+col2.metric("Waitlist", f"{int(total_waitlist):,}")
+col3.metric("Total (Including Waitlist)", f"{int(total_combined):,}")
 
 # ─────────────────────────────
-# Data preview with highlighting + integer display
+# Table display
 # ─────────────────────────────
-st.subheader("Filtered Data" + (" – High Demand Only" if show_high_demand_only else ""))
+st.subheader(
+    "Filtered Classes"
+    + (" — High Demand Only" if show_high_demand_only else "")
+)
 
-# Ensure integer display
-for col in ["Full Enrolments", "Number of Waitlists", "Total (including waitlist)"]:
-    if col in display_df.columns:
-        display_df[col] = display_df[col].round(0).astype("Int64")
+# Format numeric columns as integers
+for col in [
+    "Full Enrolments",
+    "Number of Waitlists",
+    "Total (including waitlist)"
+]:
+    filtered_df[col] = filtered_df[col].round(0).astype("Int64")
 
-def highlight_high_waitlist(row):
-    if pd.notna(row["Number of Waitlists"]) and pd.notna(row["Full Enrolments"]):
-        if row["Number of Waitlists"] > row["Full Enrolments"]:
-            return ["background-color: #ffcccc"] * len(row)
+def highlight_high_demand(row):
+    if row["Number of Waitlists"] > row["Full Enrolments"]:
+        return ["background-color: #ffcccc"] * len(row)
     return [""] * len(row)
 
-if "Full Enrolments" in display_df.columns and "Number of Waitlists" in display_df.columns:
-    styled_df = display_df.style.apply(highlight_high_waitlist, axis=1)
-    st.dataframe(styled_df, use_container_width=True, hide_index=True)
-else:
-    st.dataframe(display_df, use_container_width=True)
+styled_df = filtered_df.style.apply(highlight_high_demand, axis=1)
 
-st.caption("🔴 Rows in red: Waitlist > Full Enrolments (high demand)")
+st.dataframe(
+    styled_df,
+    use_container_width=True,
+    hide_index=True
+)
 
-# Logout button if password active
+st.caption("🔴 Highlighted rows indicate waitlist exceeds enrolments")
+
+# ─────────────────────────────
+# Logout (only active when password enabled)
+# ─────────────────────────────
 if "authenticated" in st.session_state and st.session_state.authenticated:
     if st.sidebar.button("Logout"):
         st.session_state.authenticated = False
