@@ -24,7 +24,7 @@ def require_password():
 
     st.stop()
 
-# 🔴 Uncomment this when deploying
+# 🔴 Uncomment when deploying
 # require_password()
 
 # ─────────────────────────────
@@ -45,7 +45,7 @@ def load_data():
     df = pd.read_csv("Waitlist.csv")
     df.columns = df.columns.str.strip()
 
-    # Normalize Day of Week (CRITICAL FIX)
+    # Normalize Day of Week
     if "Day of Week" in df.columns:
         df["Day of Week"] = (
             df["Day of Week"]
@@ -56,9 +56,10 @@ def load_data():
 
     # Clean numeric columns
     numeric_cols = [
+        "Quota",
         "Full Enrolments",
         "Number of Waitlists",
-        "Total (including waitlist)"
+        "Total (including waitlist)",
     ]
 
     for col in numeric_cols:
@@ -77,42 +78,63 @@ def load_data():
 df = load_data()
 
 # ─────────────────────────────
-# Sidebar filters
+# Sidebar filters (ORDERED)
 # ─────────────────────────────
 st.sidebar.header("Filters (leave blank for all)")
 
-venues = st.sidebar.multiselect(
-    "Venue",
-    options=sorted(df["Venue"].dropna().unique())
+terms = st.sidebar.multiselect(
+    "Term",
+    sorted(df["Term"].dropna().unique())
 )
 
-# ✅ Ordered Day of Week filter (Mon → Sun)
-WEEKDAY_ORDER = [
-    "Mon",
-    "Tue",
-    "Wed",
-    "Thu",
-    "Fri",
-    "Sat",
-    "Sun",
-]
+venues = st.sidebar.multiselect(
+    "Venue",
+    sorted(df["Venue"].dropna().unique())
+)
 
-available_days = df["Day of Week"].dropna().unique()
-ordered_days = [d for d in WEEKDAY_ORDER if d in available_days]
+# Day of Week (Mon → Sun, never disabled)
+WEEKDAY_ORDER = {
+    "Monday": 1,
+    "Tuesday": 2,
+    "Wednesday": 3,
+    "Thursday": 4,
+    "Friday": 5,
+    "Saturday": 6,
+    "Sunday": 7,
+}
+
+available_days = (
+    df["Day of Week"]
+    .dropna()
+    .astype(str)
+    .str.strip()
+    .str.title()
+    .unique()
+)
+
+ordered_days = sorted(
+    available_days,
+    key=lambda d: WEEKDAY_ORDER.get(d, 99)
+)
 
 days_of_week = st.sidebar.multiselect(
     "Day of Week",
-    options=ordered_days
+    ordered_days
 )
 
 time_of_day = st.sidebar.multiselect(
     "Time of Day (AM / PM)",
-    options=sorted(df["AM/PM"].dropna().unique())
+    sorted(df["AM/PM"].dropna().unique())
 )
 
 start_times = st.sidebar.multiselect(
     "Start Time",
-    options=sorted(df["Start Time"].dropna().unique())
+    sorted(df["Start Time"].dropna().unique())
+)
+
+coaches = st.sidebar.multiselect(
+    "Coach",
+    sorted(df["Coach"].dropna().unique())
 )
 
 show_high_demand_only = st.sidebar.checkbox(
@@ -124,6 +146,9 @@ show_high_demand_only = st.sidebar.checkbox(
 # Apply filters
 # ─────────────────────────────
 filtered_df = df.copy()
+
+if terms:
+    filtered_df = filtered_df[filtered_df["Term"].isin(terms)]
 
 if venues:
     filtered_df = filtered_df[filtered_df["Venue"].isin(venues)]
@@ -137,7 +162,9 @@ if time_of_day:
 if start_times:
     filtered_df = filtered_df[filtered_df["Start Time"].isin(start_times)]
 
-# High-demand filter
+if coaches:
+    filtered_df = filtered_df[filtered_df["Coach"].isin(coaches)]
+
 if show_high_demand_only:
     filtered_df = filtered_df[
         filtered_df["Number of Waitlists"] > filtered_df["Full Enrolments"]
@@ -146,15 +173,22 @@ if show_high_demand_only:
 # ─────────────────────────────
 # Metrics
 # ─────────────────────────────
-total_enrolment = filtered_df["Full Enrolments"].sum()
+total_enrolments = filtered_df["Full Enrolments"].sum()
 total_waitlist = filtered_df["Number of Waitlists"].sum()
 total_combined = filtered_df["Total (including waitlist)"].sum()
+total_quota = filtered_df["Quota"].sum()
 
-col1, col2, col3 = st.columns(3)
+utilization_pct = (
+    (total_enrolments / total_quota) * 100
+    if total_quota > 0
+    else 0
+)
 
-col1.metric("Full Enrolments", f"{int(total_enrolment):,}")
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Full Enrolments", f"{int(total_enrolments):,}")
 col2.metric("Waitlist", f"{int(total_waitlist):,}")
 col3.metric("Total (Including Waitlist)", f"{int(total_combined):,}")
+col4.metric("Utilization %", f"{utilization_pct:.2f}%")
 
 # ─────────────────────────────
 # Table display
@@ -164,20 +198,46 @@ st.subheader(
     + (" — High Demand Only" if show_high_demand_only else "")
 )
 
-# Format numeric columns as integers
-for col in [
+DISPLAY_COLUMNS = [
+    "Term",
+    "Venue",
+    "Day of Week",
+    "AM/PM",
+    "Start Time",
+    "Coach",
+    "Quota",
     "Full Enrolments",
     "Number of Waitlists",
-    "Total (including waitlist)"
+    "Total (including waitlist)",
+]
+
+display_df = filtered_df[DISPLAY_COLUMNS].copy()
+
+# Per-class utilization
+display_df["Utilization %"] = (
+    (display_df["Full Enrolments"] / display_df["Quota"]) * 100
+)
+
+# Format integer columns
+for col in [
+    "Quota",
+    "Full Enrolments",
+    "Number of Waitlists",
+    "Total (including waitlist)",
 ]:
-    filtered_df[col] = filtered_df[col].round(0).astype("Int64")
+    display_df[col] = display_df[col].round(0).astype("Int64")
 
 def highlight_high_demand(row):
     if row["Number of Waitlists"] > row["Full Enrolments"]:
         return ["background-color: #ffcccc"] * len(row)
     return [""] * len(row)
 
-styled_df = filtered_df.style.apply(highlight_high_demand, axis=1)
+styled_df = display_df.style.apply(highlight_high_demand, axis=1)
+
+# ✅ Force 2-decimal display for Utilization %
+styled_df = styled_df.format({
+    "Utilization %": "{:.2f}"
+})
 
 st.dataframe(
     styled_df,
@@ -188,7 +248,7 @@ st.dataframe(
 st.caption("🔴 Highlighted rows indicate waitlist exceeds enrolments")
 
 # ─────────────────────────────
-# Logout (only active when password enabled)
+# Logout
 # ─────────────────────────────
 if "authenticated" in st.session_state and st.session_state.authenticated:
     if st.sidebar.button("Logout"):
